@@ -24,6 +24,14 @@ Open http://localhost:5173.
 
 Other scripts: `npm run typecheck`, `npm run build`.
 
+### Play as a claude.ai artifact (no server, no API key)
+
+```bash
+npm run build:artifact    # writes dist/infiniquest-artifact.html (JS + CSS inlined)
+```
+
+Publish that file as a claude.ai artifact with the `sample` capability. Inside an artifact, the game calls Claude through the viewer's own claude.ai account (`claude.use("sample")`) instead of the local proxy. The first AI call asks the viewer for permission. If they decline, or Claude is unavailable, the game uses offline mode.
+
 ## Controls
 
 | Key | Action |

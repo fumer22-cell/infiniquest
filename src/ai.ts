@@ -45,13 +45,36 @@ function normalize(obj: Record<string, unknown>, source: AIResponse['source']): 
   };
 }
 
+/** The artifact runtime's `sample` function (claude.ai artifacts: Claude on the viewer's account). */
+type SampleFn = (input: string, opts?: Record<string, unknown>) => Promise<{ text: string }>;
+type ClaudeRuntime = { use(name: string): Promise<unknown> };
+
+// Errors after which the artifact can no longer ask Claude in this view.
+const SAMPLE_FATAL = new Set(['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'session_expired']);
+
 export class AIClient {
   online = false;
+  private sample: SampleFn | null = null;
   model = '';
   lastRaw = '';
   lastTask = '';
 
   async checkStatus(): Promise<boolean> {
+    // Running as a claude.ai artifact: use the viewer's own Claude, no server needed.
+    const rt = (window as unknown as { claude?: ClaudeRuntime }).claude;
+    if (rt?.use) {
+      try {
+        const s = (await rt.use('sample')) as SampleFn | null;
+        if (s) {
+          this.sample = s;
+          this.online = true;
+          this.model = 'Claude (your account)';
+          return true;
+        }
+      } catch {
+        // fall through to the local proxy check
+      }
+    }
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 2500);
@@ -83,24 +106,44 @@ export class AIClient {
       return normalize(m, 'mock');
     }
     let text = '';
-    try {
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 90_000);
-      const res = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, system: SYSTEM_PROMPT, prompt, maxTokens }),
-        signal: ctl.signal,
-      });
-      clearTimeout(timer);
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
-      text = String(j.text ?? '');
-    } catch (err) {
-      console.warn(`[ai] ${task} failed, using offline response`, err);
-      const m = mock();
-      this.lastRaw = `(request failed: ${String(err)}; used mock)\n` + JSON.stringify(m, null, 2);
-      return normalize(m, 'mock');
+    if (this.sample) {
+      try {
+        const res = await this.sample(`${SYSTEM_PROMPT}\n\n${prompt}`, {
+          cache: false,
+          modelTier: task === 'talk' || task === 'discover' ? 'quick' : 'default',
+        });
+        text = String(res.text ?? '');
+      } catch (err) {
+        const code = String((err as { code?: string })?.code ?? 'upstream_error');
+        if (SAMPLE_FATAL.has(code)) {
+          this.sample = null;
+          this.online = false;
+        }
+        console.warn(`[ai] ${task} failed (${code}), using offline response`);
+        const m = mock();
+        this.lastRaw = `(Claude unavailable: ${code}; used mock)\n` + JSON.stringify(m, null, 2);
+        return normalize(m, 'mock');
+      }
+    } else {
+      try {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 90_000);
+        const res = await fetch('/api/ai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task, system: SYSTEM_PROMPT, prompt, maxTokens }),
+          signal: ctl.signal,
+        });
+        clearTimeout(timer);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+        text = String(j.text ?? '');
+      } catch (err) {
+        console.warn(`[ai] ${task} failed, using offline response`, err);
+        const m = mock();
+        this.lastRaw = `(request failed: ${String(err)}; used mock)\n` + JSON.stringify(m, null, 2);
+        return normalize(m, 'mock');
+      }
     }
     this.lastRaw = text;
     const parsed = parseAIText(text);

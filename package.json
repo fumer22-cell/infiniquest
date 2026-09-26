@@ -10,7 +10,8 @@
     "dev:client": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "start": "npm run dev"
+    "start": "npm run dev",
+    "build:artifact": "node scripts/build-artifact.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
